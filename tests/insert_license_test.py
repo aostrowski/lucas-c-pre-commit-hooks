@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime
 from itertools import product
 import os
 import shutil
@@ -48,6 +49,10 @@ from pre_commit_hooks.insert_license import find_license_header_index
             ('module_without_license.py', '#', 'module_with_license_nospace.py', True, ['--no-space-in-comment-prefix']),
             ('module_without_license.php', '/*| *| */', 'module_with_license.php', True, ['--insert-license-after-regex', '^<\\?php$']),
             ('module_without_license.py', '#', 'module_with_license_noeol.py', True, ['--no-extra-eol']),
+
+            ('module_without_license.groovy', '//', 'module_with_license.groovy', True, ['--flexible-years']),
+            ('module_with_stale_year_in_license.py', '#', 'module_with_year_range_in_license.py', True, ['--flexible-years']),
+            ('module_with_stale_year_range_in_license.py', '#', 'module_with_year_range_in_license.py', True, ['--flexible-years']),
         ),
     )),
 )
@@ -69,6 +74,8 @@ def test_insert_license(license_file_path,
         if new_src_file_expected:
             with open(new_src_file_expected, encoding=encoding) as expected_content_file:
                 expected_content = expected_content_file.read()
+                if '--flexible-years' in args:
+                    expected_content = expected_content.replace("2017", str(datetime.now().year))
             new_file_content = path.open(encoding=encoding).read()
             assert new_file_content == expected_content
 
@@ -127,14 +134,18 @@ def test_fuzzy_match_license(license_file_path,
 
 
 @pytest.mark.parametrize(
-    ('src_file_content', 'expected_index'),
+    ('src_file_content', 'expected_index', 'match_years_strictly'),
     (
-        (['foo\n', 'bar\n'], None),
-        (['# License line 1\n', '# License line 2\n', '\n', 'foo\n', 'bar\n'], 0),
-        (['\n', '# License line 1\n', '# License line 2\n', 'foo\n', 'bar\n'], 1),
+        (['foo\n', 'bar\n'], None, True),
+        (['# License line 1\n', '# Copyright 2017\n', '\n', 'foo\n', 'bar\n'], 0, True),
+        (['\n', '# License line 1\n', '# Copyright 2017\n', 'foo\n', 'bar\n'], 1, True),
+        (['\n', '# License line 1\n', '# Copyright 2017\n', 'foo\n', 'bar\n'], 1, False),
+        (['# License line 1\n', '# Copyright 1984\n', '\n', 'foo\n', 'bar\n'], None, True),
+        (['# License line 1\n', '# Copyright 1984\n', '\n', 'foo\n', 'bar\n'], 0, False),
+        (['\n', '# License line 1\n', '# Copyright 2013,2015-2016\n', 'foo\n', 'bar\n'], 1, False),
     ),
 )
-def test_is_license_present(src_file_content, expected_index):
+def test_is_license_present(src_file_content, expected_index, match_years_strictly):
     license_info = LicenseInfo(
         plain_license="",
         eol="\n",
@@ -142,8 +153,10 @@ def test_is_license_present(src_file_content, expected_index):
         comment_prefix="#",
         comment_end="",
         num_extra_lines=0,
-        prefixed_license=['# License line 1\n', '# License line 2\n'])
-    assert expected_index == find_license_header_index(src_file_content, license_info, 5)
+        prefixed_license=['# License line 1\n', '# Copyright 2017\n'])
+    assert expected_index == find_license_header_index(
+        src_file_content, license_info, 5, match_years_strictly=match_years_strictly
+    )
 
 
 @pytest.mark.parametrize(
@@ -152,27 +165,34 @@ def test_is_license_present(src_file_content, expected_index):
      'comment_style',
      'fuzzy_match',
      'new_src_file_expected',
-     'fail_check'),
+     'fail_check',
+     'flexible_years'),
     map(lambda a: a[:1] + a[1], product(  # combine license files with other args
         ('LICENSE_with_trailing_newline.txt', 'LICENSE_without_trailing_newline.txt'),
         (
-            ('module_with_license.css', '/*| *| */', False, 'module_without_license.css', True),
+            ('module_with_license.css', '/*| *| */', False, 'module_without_license.css', True, False),
             ('module_with_license_and_few_words.css', '/*| *| */', False,
-                'module_without_license_and_few_words.css', True),
-            ('module_with_license_todo.css', '/*| *| */', False, None, True),
-            ('module_with_fuzzy_matched_license.css', '/*| *| */', False, None, False),
-            ('module_without_license.css', '/*| *| */', False, None, False),
+                'module_without_license_and_few_words.css', True, False),
+            ('module_with_license_todo.css', '/*| *| */', False, None, True, False),
+            ('module_with_fuzzy_matched_license.css', '/*| *| */', False, None, False, False),
+            ('module_without_license.css', '/*| *| */', False, None, False, False),
 
-            ('module_with_license.py', '#', False, 'module_without_license.py', True),
-            ('module_with_license_and_shebang.py', '#', False, 'module_without_license_and_shebang.py', True),
-            ('init_with_license.py', '#', False, 'init_without_license.py', True),
-            ('init_with_license_and_newline.py', '#', False, 'init_without_license.py', True),
+            ('module_with_license.py', '#', False, 'module_without_license.py', True, False),
+            ('module_with_license_and_shebang.py', '#', False, 'module_without_license_and_shebang.py', True, False),
+            ('init_with_license.py', '#', False, 'init_without_license.py', True, False),
+            ('init_with_license_and_newline.py', '#', False, 'init_without_license.py', True, False),
             # Fuzzy match
-            ('module_with_license.css', '/*| *| */', True, 'module_without_license.css', True),
-            ('module_with_license_todo.css', '/*| *| */', True, None, True),
-            ('module_with_fuzzy_matched_license.css', '/*| *| */', True, 'module_with_license_todo.css', True),
-            ('module_without_license.css', '/*| *| */', True, None, False),
-            ('module_with_license_and_shebang.py', '#', True, 'module_without_license_and_shebang.py', True),
+            ('module_with_license.css', '/*| *| */', True, 'module_without_license.css', True, False),
+            ('module_with_license_todo.css', '/*| *| */', True, None, True, False),
+            ('module_with_fuzzy_matched_license.css', '/*| *| */', True, 'module_with_license_todo.css', True, False),
+            ('module_without_license.css', '/*| *| */', True, None, False, False),
+            ('module_with_license_and_shebang.py', '#', True, 'module_without_license_and_shebang.py', True, False),
+            # Strict and flexible years
+            ('module_with_stale_year_in_license.py', '#', False, None, False, False),
+            ('module_with_stale_year_range_in_license.py', '#', False, None, False, False),
+            ('module_with_license.py', '#', False, 'module_without_license.py', True, True),
+            ('module_with_stale_year_in_license.py', '#', False, 'module_without_license.py', True, True),
+            ('module_with_stale_year_range_in_license.py', '#', False, 'module_without_license.py', True, True),
         ),
     )),
 )
@@ -182,6 +202,7 @@ def test_remove_license(license_file_path,
                         fuzzy_match,
                         new_src_file_expected,
                         fail_check,
+                        flexible_years,
                         tmpdir):
     with chdir_to_test_resources():
         path = tmpdir.join('src_file_path')
@@ -191,6 +212,8 @@ def test_remove_license(license_file_path,
                 '--comment-style', comment_style]
         if fuzzy_match:
             argv = ['--fuzzy-match-generates-todo'] + argv
+        if flexible_years:
+            argv = ['--flexible-years'] + argv
         assert insert_license(argv) == (1 if fail_check else 0)
         if new_src_file_expected:
             with open(new_src_file_expected, encoding='utf-8') as expected_content_file:
